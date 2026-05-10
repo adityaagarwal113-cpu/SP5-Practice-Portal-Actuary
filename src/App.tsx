@@ -482,7 +482,7 @@ export default function App() {
               id="search-input"
               type="text"
               placeholder="Search concepts or Term..."
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg py-2 pl-9 pr-4 text-xs focus:ring-1 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-white placeholder:text-slate-500"
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg py-2 pl-9 pr-8 text-xs focus:ring-1 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-white placeholder:text-slate-500"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
@@ -490,6 +490,15 @@ export default function App() {
                 setActiveTab("revision");
               }}
             />
+            {searchQuery && (
+              <button 
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-white transition-colors"
+                title="Clear Search"
+              >
+                <X size={12} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -910,8 +919,12 @@ export default function App() {
                                 <button
                                   key={id}
                                   onClick={() => {
-                                    setSearchQuery(id.toString());
-                                    setCurrentIndex(0);
+                                    setSearchQuery("");
+                                    setSelectedChapter(null);
+                                    const fullIdx = questions.findIndex(q => q.id === id);
+                                    if (fullIdx !== -1) {
+                                      setCurrentIndex(fullIdx);
+                                    }
                                     setActiveTab("revision");
                                   }}
                                   className="px-3 py-1 bg-white border border-slate-200 rounded text-[10px] font-bold text-slate-600 hover:border-indigo-600 hover:text-indigo-600 transition-all hover:shadow-sm"
@@ -1011,6 +1024,7 @@ export default function App() {
                           if (targetIdx !== -1) {
                             setCurrentIndex(targetIdx);
                             setShowAnswer(false);
+                            setSearchQuery(""); // Clear search to enable navigation
                             // Don't close immediately to let them see selection if they want
                           }
                         }
@@ -1024,6 +1038,7 @@ export default function App() {
                         onClick={() => {
                           setCurrentIndex(idx);
                           setShowAnswer(false);
+                          setSearchQuery(""); // Clear search to enable navigation
                           setShowJumpMenu(false);
                         }}
                         className={`h-12 rounded-xl flex flex-col items-center justify-center transition-all border ${
