@@ -132,10 +132,14 @@ export default function App() {
               explanation: result,
               isLoading: false
             }));
-          } catch (error) {
+          } catch (error: any) {
+            let errorMsg = "Could not explain this concept. Please check your AI key or connectivity.";
+            if (error.message?.includes("429") || error.message?.toLowerCase().includes("quota")) {
+              errorMsg = "**Limit Reached**: You've hit the daily quota for AI explanations. Please try again tomorrow or use your own API key in Settings.";
+            }
             setExplainerState(prev => ({
               ...prev,
-              explanation: "Could not explain this concept. Please check your AI key or connectivity.",
+              explanation: errorMsg,
               isLoading: false
             }));
           }
@@ -220,6 +224,7 @@ export default function App() {
   };
 
   const [aiSolution, setAiSolution] = useState<string | null>(null);
+  const [showAiSection, setShowAiSection] = useState(false);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [aiCache, setAiCache] = useState<{ [key: number]: string }>(() => {
     try {
@@ -249,7 +254,7 @@ export default function App() {
     
     if (aiCache[currentQuestion.id]) {
       setAiSolution(aiCache[currentQuestion.id]);
-      setShowAnswer(true);
+      setShowAiSection(true);
       setTimeout(() => {
         solutionRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 100);
@@ -258,16 +263,17 @@ export default function App() {
 
     setIsGeneratingAi(true);
     setAiSolution(null);
-    setShowAnswer(true);
+    setShowAiSection(true);
 
     try {
       const text = await generateSolution(
         currentQuestion.text,
         currentQuestion.examTerm,
-        currentQuestion.totalMarks || ""
+        currentQuestion.totalMarks?.toString() || ""
       );
 
       setAiSolution(text);
+      setShowAiSection(true);
       
       // Scroll to solution
       setTimeout(() => {
@@ -276,7 +282,11 @@ export default function App() {
 
     } catch (error: any) {
       console.error("AI Generation Error:", error);
-      setAiSolution(error.message || "An error occurred while generating the AI solution. Please check your connectivity.");
+      let errorMsg = "An error occurred while generating the AI solution. Please check your connectivity.";
+      if (error.message?.includes("429") || error.message?.toLowerCase().includes("quota")) {
+        errorMsg = "🚀 **Daily AI Limit Reached**\n\nYou've hit the free tier quota for generating new AI solutions today. \n\n**Solutions:**\n1. Check your **AI Insights Bank** for previously saved answers.\n2. Wait 24 hours for the quota to reset.\n3. Add your own API Key in Settings to bypass this limit.";
+      }
+      setAiSolution(errorMsg);
     } finally {
       setIsGeneratingAi(false);
     }
@@ -966,12 +976,20 @@ export default function App() {
                         <div className="flex-1 p-6 lg:p-10 border-r border-slate-100" ref={solutionRef}>
                           <div className="flex flex-col sm:flex-row items-center gap-4 mb-10">
                             <button 
-                              onClick={generateAiSolution}
+                              onClick={() => {
+                                if (aiSolution) {
+                                  setShowAiSection(!showAiSection);
+                                } else {
+                                  generateAiSolution();
+                                }
+                              }}
                               disabled={isGeneratingAi}
                               className={`w-full sm:flex-1 flex items-center justify-center gap-2 py-4 rounded-xl text-xs font-black uppercase tracking-widest transition-all border-2 ${
                                 isGeneratingAi 
                                   ? "bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed" 
-                                  : "bg-white border-indigo-600 text-indigo-600 hover:bg-indigo-50 shadow-lg shadow-indigo-600/5"
+                                  : (showAiSection && aiSolution 
+                                      ? "bg-indigo-600 border-indigo-600 text-white shadow-indigo-200" 
+                                      : "bg-white border-indigo-600 text-indigo-600 hover:bg-indigo-50 shadow-lg shadow-indigo-600/5")
                               }`}
                             >
                               {isGeneratingAi ? (
@@ -982,9 +1000,12 @@ export default function App() {
                               ) : (
                                 <>
                                   <BrainCircuit size={16} />
-                                  {aiCache[currentQuestion.id] ? "View Saved AI Solution" : "AI Professional Solution"}
+                                  {aiSolution 
+                                    ? (showAiSection ? "Hide AI Solution" : "View AI Solution") 
+                                    : "AI Professional Solution"
+                                  }
                                   {aiCache[currentQuestion.id] && (
-                                    <span className="ml-2 px-1.5 py-0.5 bg-indigo-100 text-indigo-600 text-[8px] rounded-md border border-indigo-200">Cached</span>
+                                    <span className={`ml-2 px-1.5 py-0.5 text-[8px] rounded-md border ${showAiSection ? "bg-white/20 border-white/30 text-white" : "bg-indigo-100 text-indigo-600 border-indigo-200"}`}>Cached</span>
                                   )}
                                 </>
                               )}
@@ -997,101 +1018,104 @@ export default function App() {
                               className="w-full sm:flex-1 flex items-center justify-center gap-2 py-4 bg-slate-900 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-slate-800 shadow-xl shadow-slate-900/10 transition-all"
                             >
                               <Sparkles size={16} className={showAnswer ? "rotate-180" : ""} />
-                              {showAnswer ? "Hide Content" : (aiSolution ? "Reveal AI Solution" : "Reveal Original Answer")}
+                              {showAnswer ? "Hide Official Answer" : "Reveal Official Answer"}
                             </button>
                           </div>
 
-                          <AnimatePresence mode="wait">
+                          <AnimatePresence>
+                            {(showAiSection && aiSolution) && (
+                              <motion.div 
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: "auto" }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="overflow-hidden space-y-8 mb-10 pb-10 border-b border-slate-200"
+                              >
+                                <div className="space-y-8">
+                                  <div className="flex flex-wrap items-center justify-between gap-4">
+                                    <div className="flex items-center gap-3 px-4 py-2 bg-indigo-50 border border-indigo-100 rounded-lg w-fit">
+                                      <Zap size={14} className="text-indigo-600 fill-indigo-600" />
+                                      <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">AI Expert Insight</span>
+                                    </div>
+                                    
+                                    {!aiCache[currentQuestion.id] && (
+                                      <button 
+                                        onClick={() => setAiCache(prev => ({ ...prev, [currentQuestion.id]: aiSolution }))}
+                                        className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-purple-700 shadow-md transition-all animate-pulse hover:animate-none"
+                                      >
+                                        <Save size={14} />
+                                        Save to Insights Bank
+                                      </button>
+                                    )}
+
+                                    {aiCache[currentQuestion.id] && (
+                                      <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black uppercase tracking-widest border border-slate-200">
+                                        <CheckCircle2 size={14} className="text-emerald-500" />
+                                        Saved to bank
+                                      </div>
+                                    )}
+                                  </div>
+                                  <div className="markdown-body text-slate-600 bg-white p-8 lg:p-12 rounded-2xl border-2 border-indigo-100 shadow-xl shadow-indigo-500/5">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                      {aiSolution}
+                                    </ReactMarkdown>
+                                  </div>
+                                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-3">
+                                    <AlertCircle size={18} className="text-slate-400 shrink-0 mt-0.5" />
+                                    <p className="text-xs text-slate-500 leading-relaxed italic">
+                                      Disclaimer: Generated by Gemini. Professional actuarial judgment should be applied. Align your answers with IFoA/ActEd core reading.
+                                    </p>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
+
+                          <AnimatePresence>
                             {showAnswer && (
                               <motion.div 
                                 initial={{ opacity: 0, y: 10 }}
                                 animate={{ opacity: 1, y: 0 }}
+                                exit={{ opacity: 0, y: 10 }}
                                 className="space-y-8"
                               >
-                                {aiSolution ? (
-                                  <div className="space-y-8">
-                                    <div className="flex flex-wrap items-center justify-between gap-4">
-                                      <div className="flex items-center gap-3 px-4 py-2 bg-indigo-50 border border-indigo-100 rounded-lg w-fit">
-                                        <Zap size={14} className="text-indigo-600 fill-indigo-600" />
-                                        <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">AI Expert Insight</span>
-                                      </div>
-                                      
-                                      {aiSolution && !aiCache[currentQuestion.id] && (
-                                        <button 
-                                          onClick={() => setAiCache(prev => ({ ...prev, [currentQuestion.id]: aiSolution }))}
-                                          className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-purple-700 shadow-md transition-all animate-pulse hover:animate-none"
-                                        >
-                                          <Save size={14} />
-                                          Save to Insights Bank
-                                        </button>
-                                      )}
+                                <div className="space-y-8">
+                                  <div className="flex items-center gap-3 px-4 py-2 bg-emerald-50 border border-emerald-100 rounded-lg w-fit">
+                                    <CheckCircle2 size={14} className="text-emerald-600" />
+                                    <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Official Model Solution</span>
+                                  </div>
+                                  <div className="markdown-body text-slate-600 bg-white p-8 lg:p-12 rounded-2xl border border-slate-100 shadow-sm">
+                                    <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                                      {currentQuestion.solution}
+                                    </ReactMarkdown>
+                                  </div>
 
-                                      {aiCache[currentQuestion.id] && (
-                                        <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black uppercase tracking-widest border border-slate-200">
-                                          <CheckCircle2 size={14} className="text-emerald-500" />
-                                          Saved to bank
+                                  {(currentQuestion.hint || currentQuestion.frameworks) && (
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-10">
+                                      {(currentQuestion.hint && currentQuestion.hint !== "None") && (
+                                        <div className="bg-amber-50/50 p-6 rounded-2xl border border-amber-100">
+                                          <div className="flex items-center gap-3 mb-4">
+                                            <Zap size={18} className="text-amber-500 fill-amber-500" />
+                                            <h4 className="text-xs font-black text-amber-900 uppercase tracking-widest">ActEd Hint</h4>
+                                          </div>
+                                          <div className="prose prose-amber prose-sm max-w-none text-amber-900/80">
+                                            <ReactMarkdown>{currentQuestion.hint}</ReactMarkdown>
+                                          </div>
+                                        </div>
+                                      )}
+                                      {(currentQuestion.frameworks && currentQuestion.frameworks !== "None") && (
+                                        <div className="bg-emerald-50/50 p-6 rounded-2xl border border-emerald-100">
+                                          <div className="flex items-center gap-3 mb-4">
+                                            <Award size={18} className="text-emerald-600" />
+                                            <h4 className="text-xs font-black text-emerald-900 uppercase tracking-widest">Frameworks</h4>
+                                          </div>
+                                          <div className="prose prose-emerald prose-sm max-w-none text-emerald-900/80">
+                                            <ReactMarkdown>{currentQuestion.frameworks}</ReactMarkdown>
+                                          </div>
                                         </div>
                                       )}
                                     </div>
-                                    <div className="markdown-body text-slate-600 bg-white p-8 lg:p-12 rounded-2xl border-2 border-indigo-100 shadow-xl shadow-indigo-500/5">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                                        {aiSolution}
-                                      </ReactMarkdown>
-                                    </div>
-                                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl flex items-start gap-3">
-                                      <AlertCircle size={18} className="text-slate-400 shrink-0 mt-0.5" />
-                                      <p className="text-xs text-slate-500 leading-relaxed italic">
-                                        Disclaimer: Generated by Gemini. Professional actuarial judgment should be applied. Align your answers with IFoA/ActEd core reading.
-                                      </p>
-                                    </div>
-                                    <button 
-                                      onClick={() => setAiSolution(null)}
-                                      className="text-[10px] font-black text-slate-400 hover:text-indigo-600 uppercase tracking-widest flex items-center gap-2 transition-colors mx-auto"
-                                    >
-                                      <RefreshCcw size={12} />
-                                      Switch to Original Model Solution
-                                    </button>
-                                  </div>
-                                ) : (
-                                  <div className="space-y-8">
-                                    <div className="flex items-center gap-3 px-4 py-2 bg-emerald-50 border border-emerald-100 rounded-lg w-fit">
-                                      <CheckCircle2 size={14} className="text-emerald-600" />
-                                      <span className="text-[10px] font-black text-emerald-600 uppercase tracking-widest">Official Model Solution</span>
-                                    </div>
-                                    <div className="markdown-body text-slate-600 bg-white p-8 lg:p-12 rounded-2xl border border-slate-100 shadow-sm">
-                                      <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                                        {currentQuestion.solution}
-                                      </ReactMarkdown>
-                                    </div>
-
-                                    {(currentQuestion.hint || currentQuestion.frameworks) && (
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-10">
-                                        {currentQuestion.hint && (
-                                          <div className="bg-amber-50/50 p-6 rounded-2xl border border-amber-100">
-                                            <div className="flex items-center gap-3 mb-4">
-                                              <Zap size={18} className="text-amber-500 fill-amber-500" />
-                                              <h4 className="text-xs font-black text-amber-900 uppercase tracking-widest">ActEd Hint</h4>
-                                            </div>
-                                            <div className="prose prose-amber prose-sm max-w-none text-amber-900/80">
-                                              <ReactMarkdown>{currentQuestion.hint}</ReactMarkdown>
-                                            </div>
-                                          </div>
-                                        )}
-                                        {currentQuestion.frameworks && (
-                                          <div className="bg-emerald-50/50 p-6 rounded-2xl border border-emerald-100">
-                                            <div className="flex items-center gap-3 mb-4">
-                                              <Award size={18} className="text-emerald-600" />
-                                              <h4 className="text-xs font-black text-emerald-900 uppercase tracking-widest">Frameworks</h4>
-                                            </div>
-                                            <div className="prose prose-emerald prose-sm max-w-none text-emerald-900/80">
-                                              <ReactMarkdown>{currentQuestion.frameworks}</ReactMarkdown>
-                                            </div>
-                                          </div>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
+                                  )}
+                                </div>
                               </motion.div>
                             )}
                           </AnimatePresence>
