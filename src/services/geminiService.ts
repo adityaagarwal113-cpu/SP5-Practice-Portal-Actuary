@@ -1,11 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
 
 const getGeminiKey = () => {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key || key === "undefined") {
-    return null;
-  }
-  return key;
+  return "AIzaSyCP8arGqyhSTi8I-JmR_btkQR4upx6cfnU";
 };
 
 export const getAiClient = () => {
