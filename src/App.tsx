@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { generateSolution } from "./services/geminiService";
+import { generateSolution, explainConcept } from "./services/geminiService";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -27,7 +27,8 @@ import {
   RefreshCcw,
   AlertCircle,
   Target,
-  Award
+  Award,
+  Save
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -75,6 +76,79 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<"revision" | "mapping">("revision");
   const [showJumpMenu, setShowJumpMenu] = useState(false);
   const [isFlashcardMode, setIsFlashcardMode] = useState(false);
+  
+  // --- Filtering State ---
+  const [selectedTerm, setSelectedTerm] = useState<string | null>(null);
+  const [selectedMarksRange, setSelectedMarksRange] = useState<string | null>(null);
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+  
+  // --- Explainer State ---
+  const [explainerState, setExplainerState] = useState<{
+    isOpen: boolean;
+    concept: string;
+    explanation: string | null;
+    isLoading: boolean;
+    x: number;
+    y: number;
+  }>({
+    isOpen: false,
+    concept: "",
+    explanation: null,
+    isLoading: false,
+    x: 0,
+    y: 0
+  });
+
+  const handleTextSelection = (e: React.MouseEvent | React.TouchEvent) => {
+    // Only trigger on desktop/touch end
+  };
+
+  useEffect(() => {
+    const handleMouseUp = async (e: MouseEvent) => {
+      // Don't trigger if clicking inside the explainer itself
+      if ((e.target as HTMLElement).closest('.explainer-popup')) return;
+
+      const selection = window.getSelection();
+      const selectedText = selection?.toString().trim();
+
+      if (selectedText && selectedText.length > 2 && selectedText.length < 60) {
+        const range = selection?.getRangeAt(0);
+        const rect = range?.getBoundingClientRect();
+
+        if (rect) {
+          setExplainerState({
+            isOpen: true,
+            concept: selectedText,
+            explanation: null,
+            isLoading: true,
+            x: rect.left + window.scrollX,
+            y: rect.top + window.scrollY - 10
+          });
+
+          try {
+            const result = await explainConcept(selectedText, "");
+            setExplainerState(prev => ({
+              ...prev,
+              explanation: result,
+              isLoading: false
+            }));
+          } catch (error) {
+            setExplainerState(prev => ({
+              ...prev,
+              explanation: "Could not explain this concept. Please check your AI key or connectivity.",
+              isLoading: false
+            }));
+          }
+        }
+      } else if (!selectedText) {
+        // If clicking away, close unless it was a click inside (handled above)
+        setExplainerState(prev => ({ ...prev, isOpen: false }));
+      }
+    };
+
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => document.removeEventListener("mouseup", handleMouseUp);
+  }, []);
   
   // --- New Features State ---
   const [bookmarkedIds, setBookmarkedIds] = useState<number[]>(() => {
@@ -194,7 +268,6 @@ export default function App() {
       );
 
       setAiSolution(text);
-      setAiCache(prev => ({ ...prev, [currentQuestion.id]: text }));
       
       // Scroll to solution
       setTimeout(() => {
@@ -294,21 +367,42 @@ export default function App() {
 
   const filteredQuestions = useMemo(() => {
     return questions.filter(q => {
+      // Text Search
       const matchesSearch = 
         q.text.toLowerCase().includes(searchQuery.toLowerCase()) || 
         q.id.toString().includes(searchQuery) ||
         q.examTerm.toLowerCase().includes(searchQuery.toLowerCase());
       
+      // Chapter Filter
       let matchesChapter = true;
       if (selectedChapter === "bookmarked") {
         matchesChapter = bookmarkedIds.includes(q.id);
+      } else if (selectedChapter === "ai-saved") {
+        matchesChapter = !!aiCache[q.id];
       } else if (selectedChapter) {
         matchesChapter = q.chapter === selectedChapter;
       }
+
+      // Term Filter
+      const matchesTerm = selectedTerm ? q.examTerm === selectedTerm : true;
+
+      // Marks Filter
+      let matchesMarks = true;
+      if (selectedMarksRange) {
+        const marks = q.totalMarks || 0;
+        if (selectedMarksRange === "1-5") matchesMarks = marks >= 1 && marks <= 5;
+        else if (selectedMarksRange === "6-12") matchesMarks = marks >= 6 && marks <= 12;
+        else if (selectedMarksRange === "13+") matchesMarks = marks >= 13;
+      }
       
-      return matchesSearch && matchesChapter;
+      return matchesSearch && matchesChapter && matchesTerm && matchesMarks;
     });
-  }, [questions, searchQuery, selectedChapter, bookmarkedIds]);
+  }, [questions, searchQuery, selectedChapter, bookmarkedIds, aiCache, selectedTerm, selectedMarksRange]);
+
+  const allTerms = useMemo(() => {
+    const terms = Array.from(new Set(questions.map(q => q.examTerm))).filter(Boolean);
+    return terms.sort((a, b) => b.localeCompare(a)); // Reverse chronological roughly
+  }, [questions]);
 
   const chapterProgress = useMemo(() => {
     const progress: { [key: string]: number } = {};
@@ -476,28 +570,120 @@ export default function App() {
             </button>
           </div>
           
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-            <input 
-              id="search-input"
-              type="text"
-              placeholder="Search concepts or Term..."
-              className="w-full bg-slate-900 border border-slate-700 rounded-lg py-2 pl-9 pr-8 text-xs focus:ring-1 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-white placeholder:text-slate-500"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setCurrentIndex(0);
-                setActiveTab("revision");
-              }}
-            />
-            {searchQuery && (
+          <div className="relative flex flex-col gap-2">
+            <div className="relative flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+                <input 
+                  id="search-input"
+                  type="text"
+                  placeholder="Search concepts or Term..."
+                  className="w-full bg-slate-900 border border-slate-700 rounded-lg py-2 pl-9 pr-8 text-xs focus:ring-1 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-white placeholder:text-slate-500"
+                  value={searchQuery}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setCurrentIndex(0);
+                    setActiveTab("revision");
+                  }}
+                />
+                {searchQuery && (
+                  <button 
+                    onClick={() => setSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-white transition-colors"
+                    title="Clear Search"
+                  >
+                    <X size={12} />
+                  </button>
+                )}
+              </div>
               <button 
-                onClick={() => setSearchQuery("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-slate-500 hover:text-white transition-colors"
-                title="Clear Search"
+                onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+                className={`p-2 rounded-lg border transition-all ${showAdvancedFilters || selectedTerm || selectedMarksRange ? "bg-indigo-600 border-indigo-500 text-white shadow-lg" : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"}`}
+                title="Advanced Filters"
               >
-                <X size={12} />
+                <TableProperties size={16} />
               </button>
+            </div>
+
+            <AnimatePresence>
+              {showAdvancedFilters && (
+                <motion.div 
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: "auto", opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="overflow-hidden bg-slate-800/50 rounded-xl border border-slate-700/50 p-4 space-y-4"
+                >
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Exam Sitting</label>
+                    <select 
+                      value={selectedTerm || ""}
+                      onChange={(e) => setSelectedTerm(e.target.value || null)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg py-2 px-3 text-[10px] text-white focus:ring-1 focus:ring-indigo-500 outline-none"
+                    >
+                      <option value="">All Sittings</option>
+                      {allTerms.map(term => (
+                        <option key={term} value={term}>{term}</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Question Weight</label>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { label: "Small (1-5)", value: "1-5" },
+                        { label: "Medium (6-12)", value: "6-12" },
+                        { label: "High (13+)", value: "13+" }
+                      ].map(range => (
+                        <button
+                          key={range.value}
+                          onClick={() => setSelectedMarksRange(selectedMarksRange === range.value ? null : range.value)}
+                          className={`px-3 py-1.5 rounded-lg text-[9px] font-bold border transition-all ${
+                            selectedMarksRange === range.value 
+                              ? "bg-indigo-600 border-indigo-500 text-white" 
+                              : "bg-slate-900 border-slate-700 text-slate-400 hover:border-slate-500"
+                          }`}
+                        >
+                          {range.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={() => {
+                      setSelectedTerm(null);
+                      setSelectedMarksRange(null);
+                      setSearchQuery("");
+                      setSelectedChapter(null);
+                    }}
+                    className="w-full py-2 bg-slate-700 hover:bg-slate-600 text-[9px] font-black uppercase tracking-widest rounded-lg transition-colors"
+                  >
+                    Reset All Filters
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {(selectedTerm || selectedMarksRange) && (
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {selectedTerm && (
+                  <button 
+                    onClick={() => setSelectedTerm(null)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 rounded-md text-[9px] font-bold"
+                  >
+                    {selectedTerm} <X size={8} />
+                  </button>
+                )}
+                {selectedMarksRange && (
+                  <button 
+                    onClick={() => setSelectedMarksRange(null)}
+                    className="flex items-center gap-1.5 px-2 py-1 bg-orange-500/10 border border-orange-500/30 text-orange-400 rounded-md text-[9px] font-bold"
+                  >
+                    {selectedMarksRange} Marks <X size={8} />
+                  </button>
+                )}
+              </div>
             )}
           </div>
         </div>
@@ -534,6 +720,21 @@ export default function App() {
                 <span>Bookmarked</span>
               </div>
               <span className={`text-[10px] px-2 py-0.5 rounded ${selectedChapter === "bookmarked" ? "bg-white/20" : "bg-slate-700 text-slate-300"}`}>{bookmarkedIds.length}</span>
+            </li>
+            <li 
+              id="chapter-ai-saved"
+              onClick={() => {
+                setSelectedChapter("ai-saved");
+                setCurrentIndex(0);
+                setActiveTab("revision");
+              }}
+              className={`p-3 rounded-lg cursor-pointer transition-all flex items-center justify-between text-xs ${selectedChapter === "ai-saved" ? "bg-purple-600 font-bold shadow-lg text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}
+            >
+              <div className="flex items-center gap-3">
+                <BrainCircuit size={14} className={Object.keys(aiCache).length > 0 ? "text-purple-400" : ""} />
+                <span>AI Insights Bank</span>
+              </div>
+              <span className={`text-[10px] px-2 py-0.5 rounded ${selectedChapter === "ai-saved" ? "bg-white/20" : "bg-slate-700 text-slate-300"}`}>{Object.keys(aiCache).length}</span>
             </li>
             {CHAPTERS.map((chap) => (
               <li 
@@ -781,7 +982,10 @@ export default function App() {
                               ) : (
                                 <>
                                   <BrainCircuit size={16} />
-                                  AI Professional Solution
+                                  {aiCache[currentQuestion.id] ? "View Saved AI Solution" : "AI Professional Solution"}
+                                  {aiCache[currentQuestion.id] && (
+                                    <span className="ml-2 px-1.5 py-0.5 bg-indigo-100 text-indigo-600 text-[8px] rounded-md border border-indigo-200">Cached</span>
+                                  )}
                                 </>
                               )}
                             </button>
@@ -789,12 +993,11 @@ export default function App() {
                             <button 
                               onClick={() => {
                                 setShowAnswer(!showAnswer);
-                                setAiSolution(null);
                               }}
                               className="w-full sm:flex-1 flex items-center justify-center gap-2 py-4 bg-slate-900 text-white rounded-xl text-xs font-black uppercase tracking-widest hover:bg-slate-800 shadow-xl shadow-slate-900/10 transition-all"
                             >
                               <Sparkles size={16} className={showAnswer ? "rotate-180" : ""} />
-                              {showAnswer ? "Hide Content" : "Reveal Original Answer"}
+                              {showAnswer ? "Hide Content" : (aiSolution ? "Reveal AI Solution" : "Reveal Original Answer")}
                             </button>
                           </div>
 
@@ -807,9 +1010,28 @@ export default function App() {
                               >
                                 {aiSolution ? (
                                   <div className="space-y-8">
-                                    <div className="flex items-center gap-3 px-4 py-2 bg-indigo-50 border border-indigo-100 rounded-lg w-fit">
-                                      <Zap size={14} className="text-indigo-600 fill-indigo-600" />
-                                      <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">AI Expert Insight</span>
+                                    <div className="flex flex-wrap items-center justify-between gap-4">
+                                      <div className="flex items-center gap-3 px-4 py-2 bg-indigo-50 border border-indigo-100 rounded-lg w-fit">
+                                        <Zap size={14} className="text-indigo-600 fill-indigo-600" />
+                                        <span className="text-[10px] font-black text-indigo-600 uppercase tracking-widest">AI Expert Insight</span>
+                                      </div>
+                                      
+                                      {aiSolution && !aiCache[currentQuestion.id] && (
+                                        <button 
+                                          onClick={() => setAiCache(prev => ({ ...prev, [currentQuestion.id]: aiSolution }))}
+                                          className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-purple-700 shadow-md transition-all animate-pulse hover:animate-none"
+                                        >
+                                          <Save size={14} />
+                                          Save to Insights Bank
+                                        </button>
+                                      )}
+
+                                      {aiCache[currentQuestion.id] && (
+                                        <div className="flex items-center gap-2 px-4 py-2 bg-slate-100 text-slate-500 rounded-lg text-[10px] font-black uppercase tracking-widest border border-slate-200">
+                                          <CheckCircle2 size={14} className="text-emerald-500" />
+                                          Saved to bank
+                                        </div>
+                                      )}
                                     </div>
                                     <div className="markdown-body text-slate-600 bg-white p-8 lg:p-12 rounded-2xl border-2 border-indigo-100 shadow-xl shadow-indigo-500/5">
                                       <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
@@ -974,6 +1196,61 @@ export default function App() {
                 >
                   <X size={20} />
                 </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* AI Concept Explainer Popup */}
+        <AnimatePresence>
+          {explainerState.isOpen && (
+            <motion.div 
+              initial={{ opacity: 0, y: 10, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+              style={{ 
+                left: `min(calc(100vw - 320px), max(20px, ${explainerState.x}px))`, 
+                top: `calc(${explainerState.y}px - 10px)`,
+                transform: 'translateY(-100%)'
+              }}
+              className="fixed z-[200] w-72 bg-white rounded-xl shadow-2xl border border-slate-200 overflow-hidden explainer-popup"
+            >
+              <div className="bg-slate-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <BrainCircuit size={12} className="text-indigo-400" />
+                  <span className="text-[10px] font-black text-white uppercase tracking-widest truncate max-w-[150px]">
+                    {explainerState.concept}
+                  </span>
+                </div>
+                <button 
+                  onClick={() => setExplainerState(prev => ({ ...prev, isOpen: false }))}
+                  className="text-slate-400 hover:text-white transition-colors"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+              
+              <div className="p-4 max-h-[300px] overflow-y-auto custom-scrollbar">
+                {explainerState.isLoading ? (
+                  <div className="flex flex-col items-center justify-center py-6 gap-3">
+                    <motion.div 
+                      animate={{ rotate: 360 }}
+                      transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                    >
+                      <RefreshCcw size={16} className="text-indigo-500" />
+                    </motion.div>
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest animate-pulse">Consulting AI Tutor...</span>
+                  </div>
+                ) : (
+                  <div className="prose prose-slate prose-xs max-w-none prose-p:leading-relaxed prose-p:text-slate-600 prose-strong:text-indigo-600">
+                    <ReactMarkdown>{explainerState.explanation || ""}</ReactMarkdown>
+                  </div>
+                )}
+              </div>
+              
+              <div className="px-4 py-2 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
+                <span className="text-[8px] font-medium text-slate-400">Actuarial Concept Explainer</span>
+                <Sparkles size={10} className="text-indigo-300" />
               </div>
             </motion.div>
           )}

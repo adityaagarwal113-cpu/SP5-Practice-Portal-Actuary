@@ -50,3 +50,35 @@ export const generateSolution = async (question: string, term: string, marks: st
     throw error;
   }
 };
+
+export const explainConcept = async (concept: string, context: string) => {
+  const ai = getAiClient();
+  if (!ai) {
+    throw new Error("AI Client not initialized.");
+  }
+
+  const prompt = `
+    You are an Actuarial SP5 (Investment Specialist) Tutor.
+    Explain the following term/concept: "${concept}".
+    
+    Context where it was found: "${context}"
+    
+    Requirements:
+    1. Provide a concise definition (2-3 sentences).
+    2. Explain its specific relevance to the SP5 exam (Investment Specialist).
+    3. Use examples if applicable (e.g., how it affects portfolio construction or risk management).
+    4. Format using Markdown with bolded key terms.
+    5. Max 150 words.
+  `;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: prompt,
+    });
+    return response.text || "Failed to generate explanation.";
+  } catch (error) {
+    console.error("Gemini Concept Explain Error:", error);
+    throw error;
+  }
+};
