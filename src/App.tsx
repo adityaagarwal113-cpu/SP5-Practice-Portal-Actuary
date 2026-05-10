@@ -78,8 +78,13 @@ export default function App() {
   const [aiSolution, setAiSolution] = useState<string | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [aiCache, setAiCache] = useState<{ [key: number]: string }>(() => {
-    const saved = localStorage.getItem("sp5_ai_cache");
-    return saved ? JSON.parse(saved) : {};
+    try {
+      const saved = localStorage.getItem("sp5_ai_cache");
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      console.error("Failed to parse AI cache", e);
+      return {};
+    }
   });
 
   const solutionRef = useRef<HTMLDivElement>(null);
@@ -88,7 +93,14 @@ export default function App() {
     localStorage.setItem("sp5_ai_cache", JSON.stringify(aiCache));
   }, [aiCache]);
 
-  const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY }), []);
+  const ai = useMemo(() => {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key || key === "undefined") {
+      console.warn("GEMINI_API_KEY is not defined. AI features will be disabled.");
+      return null;
+    }
+    return new GoogleGenAI({ apiKey: key });
+  }, []);
 
   useEffect(() => {
     if (questions.length > 0 && questions[currentIndex]) {
@@ -112,6 +124,12 @@ export default function App() {
     setIsGeneratingAi(true);
     setAiSolution(null);
     setShowAnswer(true);
+
+    if (!ai) {
+      setAiSolution("The AI Tutor is currently unavailable because the API key is not configured. Please ensure GEMINI_API_KEY is set in the environment.");
+      setIsGeneratingAi(false);
+      return;
+    }
 
     try {
       const prompt = `
@@ -162,7 +180,8 @@ export default function App() {
   useEffect(() => {
     async function fetchAndParseMD() {
       try {
-        const response = await fetch("/SP5_Master_Revision.md");
+        const response = await fetch("SP5_Master_Revision.md");
+        if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const text = await response.text();
         
         const qBlocks = text.split("### Question ").slice(1);
@@ -217,9 +236,10 @@ export default function App() {
         });
 
         setQuestions(parsedQs);
-        setIsLoading(false);
       } catch (error) {
         console.error("Error loading revision bank:", error);
+      } finally {
+        setIsLoading(false);
       }
     }
 
