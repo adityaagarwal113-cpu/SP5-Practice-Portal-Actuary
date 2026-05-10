@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { GoogleGenAI } from "@google/genai";
+import { generateSolution } from "./services/geminiService";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
@@ -93,15 +93,6 @@ export default function App() {
     localStorage.setItem("sp5_ai_cache", JSON.stringify(aiCache));
   }, [aiCache]);
 
-  const ai = useMemo(() => {
-    const key = process.env.GEMINI_API_KEY;
-    if (!key || key === "undefined") {
-      console.warn("GEMINI_API_KEY is not defined. AI features will be disabled.");
-      return null;
-    }
-    return new GoogleGenAI({ apiKey: key });
-  }, []);
-
   useEffect(() => {
     if (questions.length > 0 && questions[currentIndex]) {
       const q = questions[currentIndex];
@@ -125,36 +116,13 @@ export default function App() {
     setAiSolution(null);
     setShowAnswer(true);
 
-    if (!ai) {
-      setAiSolution("The AI Tutor is currently unavailable because the API key is not configured. Please ensure GEMINI_API_KEY is set in the environment.");
-      setIsGeneratingAi(false);
-      return;
-    }
-
     try {
-      const prompt = `
-        You are a top-tier Investment Specialist (SP5 level actuary).
-        Provide a professional solution for the following SP5 exam question.
-        
-        Question: ${currentQuestion.text}
-        Exam Term: ${currentQuestion.examTerm}
-        
-        Requirements:
-        1. Adhere strictly to IAI, IFoA, and ActEd SP5 "Core Reading" standards.
-        2. Provide high-quality points with mark allocations (e.g., [1/2], [1]) for EVERY point.
-        3. For a 10-mark question, provide at least 10 distinct points or 20 half-mark points.
-        4. Structure the response into clear sections: "Key Analytical Principles", "Full Model Solution", and "Examiner's Perspective/ActEd Hints".
-        5. Use standard actuarial terminology (e.g., "Basis Risk", "Liability Proxy", "Prudence", "Market Consistency").
-        6. Total marks available for this question: ${currentQuestion.totalMarks || "as specified in question (usually 5 to 15 marks)"}.
-        7. Format using professional Markdown with clear headings and bolded key terms.
-      `;
+      const text = await generateSolution(
+        currentQuestion.text,
+        currentQuestion.examTerm,
+        currentQuestion.totalMarks || ""
+      );
 
-      const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-      });
-
-      const text = response.text || "Failed to generate solution.";
       setAiSolution(text);
       setAiCache(prev => ({ ...prev, [currentQuestion.id]: text }));
       
@@ -163,9 +131,9 @@ export default function App() {
         solutionRef.current?.scrollIntoView({ behavior: 'smooth' });
       }, 100);
 
-    } catch (error) {
+    } catch (error: any) {
       console.error("AI Generation Error:", error);
-      setAiSolution("An error occurred while generating the AI solution. Please check your connectivity.");
+      setAiSolution(error.message || "An error occurred while generating the AI solution. Please check your API key in Settings.");
     } finally {
       setIsGeneratingAi(false);
     }
