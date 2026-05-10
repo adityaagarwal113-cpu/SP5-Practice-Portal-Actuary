@@ -74,7 +74,77 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<"revision" | "mapping">("revision");
   const [showJumpMenu, setShowJumpMenu] = useState(false);
+  const [isFlashcardMode, setIsFlashcardMode] = useState(false);
   
+  // --- New Features State ---
+  const [bookmarkedIds, setBookmarkedIds] = useState<number[]>(() => {
+    try {
+      const saved = localStorage.getItem("sp5_bookmarks");
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+
+  const [masteredIds, setMasteredIds] = useState<number[]>(() => {
+    try {
+      const saved = localStorage.getItem("sp5_mastered");
+      return saved ? JSON.parse(saved) : [];
+    } catch { return []; }
+  });
+
+  const [timerFullSeconds, setTimerFullSeconds] = useState(0);
+  const [timerRemaining, setTimerRemaining] = useState(0);
+  const [isTimerActive, setIsTimerActive] = useState(false);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  const toggleBookmark = (id: number) => {
+    setBookmarkedIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  const toggleMastered = (id: number) => {
+    setMasteredIds(prev => 
+      prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]
+    );
+  };
+
+  useEffect(() => {
+    localStorage.setItem("sp5_bookmarks", JSON.stringify(bookmarkedIds));
+  }, [bookmarkedIds]);
+
+  useEffect(() => {
+    localStorage.setItem("sp5_mastered", JSON.stringify(masteredIds));
+  }, [masteredIds]);
+
+  // Timer Logic
+  const startTimer = (marks: number) => {
+    const minutes = marks * 1.8;
+    const seconds = Math.floor(minutes * 60);
+    setTimerFullSeconds(seconds);
+    setTimerRemaining(seconds);
+    setIsTimerActive(true);
+  };
+
+  useEffect(() => {
+    if (isTimerActive && timerRemaining > 0) {
+      timerRef.current = setInterval(() => {
+        setTimerRemaining(prev => prev - 1);
+      }, 1000);
+    } else {
+      if (timerRef.current) clearInterval(timerRef.current);
+      if (timerRemaining === 0) setIsTimerActive(false);
+    }
+    return () => {
+      if (timerRef.current) clearInterval(timerRef.current);
+    };
+  }, [isTimerActive, timerRemaining]);
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
   const [aiSolution, setAiSolution] = useState<string | null>(null);
   const [isGeneratingAi, setIsGeneratingAi] = useState(false);
   const [aiCache, setAiCache] = useState<{ [key: number]: string }>(() => {
@@ -133,7 +203,7 @@ export default function App() {
 
     } catch (error: any) {
       console.error("AI Generation Error:", error);
-      setAiSolution(error.message || "An error occurred while generating the AI solution. Please check your API key in Settings.");
+      setAiSolution(error.message || "An error occurred while generating the AI solution. Please check your connectivity.");
     } finally {
       setIsGeneratingAi(false);
     }
@@ -228,10 +298,36 @@ export default function App() {
         q.text.toLowerCase().includes(searchQuery.toLowerCase()) || 
         q.id.toString().includes(searchQuery) ||
         q.examTerm.toLowerCase().includes(searchQuery.toLowerCase());
-      const matchesChapter = selectedChapter ? q.chapter === selectedChapter : true;
+      
+      let matchesChapter = true;
+      if (selectedChapter === "bookmarked") {
+        matchesChapter = bookmarkedIds.includes(q.id);
+      } else if (selectedChapter) {
+        matchesChapter = q.chapter === selectedChapter;
+      }
+      
       return matchesSearch && matchesChapter;
     });
-  }, [questions, searchQuery, selectedChapter]);
+  }, [questions, searchQuery, selectedChapter, bookmarkedIds]);
+
+  const chapterProgress = useMemo(() => {
+    const progress: { [key: string]: number } = {};
+    CHAPTERS.forEach(chap => {
+      const chapQs = questions.filter(q => chap.questions.includes(q.id));
+      if (chapQs.length === 0) {
+        progress[chap.id] = 0;
+        return;
+      }
+      const masteredInChap = chapQs.filter(q => masteredIds.includes(q.id)).length;
+      progress[chap.id] = Math.round((masteredInChap / chapQs.length) * 100);
+    });
+    return progress;
+  }, [questions, masteredIds]);
+
+  const totalProgress = useMemo(() => {
+    if (questions.length === 0) return 0;
+    return Math.round((masteredIds.length / questions.length) * 100);
+  }, [questions, masteredIds]);
 
   const mappingSummary = useMemo(() => {
     const map: { [key: string]: number[] } = {};
@@ -331,6 +427,25 @@ export default function App() {
           </button>
         </div>
 
+        {activeTab === "revision" && (
+          <div className="px-6 py-4 bg-slate-800/50 border-b border-slate-700/30">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Overall Mastery</span>
+              <span className="text-xs font-black text-indigo-400">{totalProgress}%</span>
+            </div>
+            <div className="h-1.5 w-full bg-slate-700 rounded-full overflow-hidden">
+              <motion.div 
+                initial={{ width: 0 }}
+                animate={{ width: `${totalProgress}%` }}
+                className="h-full bg-indigo-500 shadow-[0_0_8px_rgba(99,102,241,0.5)]"
+              />
+            </div>
+            <p className="text-[9px] text-slate-500 mt-2 font-medium">
+              {masteredIds.length} of {questions.length} questions completed
+            </p>
+          </div>
+        )}
+
         <div className="p-4 border-b border-slate-700/50 flex flex-col gap-3">
           <div className="flex bg-slate-800 rounded-lg p-1">
             <button 
@@ -388,10 +503,28 @@ export default function App() {
                 setCurrentIndex(0);
                 setActiveTab("revision");
               }}
-              className={`p-3 rounded-lg cursor-pointer transition-all flex items-center justify-between text-xs ${!selectedChapter ? "bg-indigo-600 font-bold shadow-lg" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}
+              className={`p-3 rounded-lg cursor-pointer transition-all flex items-center justify-between text-xs ${!selectedChapter ? "bg-indigo-600 font-bold shadow-lg text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}
             >
-              <span>Library Home</span>
-              <span className={`text-[10px] px-2 py-0.5 rounded ${!selectedChapter ? "bg-white/20" : "bg-slate-700"}`}>{questions.length} Qs</span>
+              <div className="flex items-center gap-3">
+                <Layout size={14} />
+                <span>Full Library</span>
+              </div>
+              <span className={`text-[10px] px-2 py-0.5 rounded ${!selectedChapter ? "bg-white/20" : "bg-slate-700 text-slate-300"}`}>{questions.length}</span>
+            </li>
+            <li 
+              id="chapter-bookmark"
+              onClick={() => {
+                setSelectedChapter("bookmarked");
+                setCurrentIndex(0);
+                setActiveTab("revision");
+              }}
+              className={`p-3 rounded-lg cursor-pointer transition-all flex items-center justify-between text-xs ${selectedChapter === "bookmarked" ? "bg-amber-600 font-bold shadow-lg text-white" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}
+            >
+              <div className="flex items-center gap-3">
+                <Star size={14} className={bookmarkedIds.length > 0 ? "fill-amber-400 text-amber-400" : ""} />
+                <span>Bookmarked</span>
+              </div>
+              <span className={`text-[10px] px-2 py-0.5 rounded ${selectedChapter === "bookmarked" ? "bg-white/20" : "bg-slate-700 text-slate-300"}`}>{bookmarkedIds.length}</span>
             </li>
             {CHAPTERS.map((chap) => (
               <li 
@@ -402,15 +535,24 @@ export default function App() {
                   setCurrentIndex(0);
                   setActiveTab("revision");
                 }}
-                className={`p-3 rounded-lg cursor-pointer transition-all flex items-center justify-between text-xs ${selectedChapter === chap.id ? "bg-indigo-600 text-white font-bold shadow-lg" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}
+                className={`p-3 rounded-lg cursor-pointer transition-all flex flex-col gap-2 ${selectedChapter === chap.id ? "bg-indigo-600 text-white font-bold shadow-lg" : "text-slate-400 hover:bg-slate-800 hover:text-white"}`}
               >
-                <div className="flex items-center gap-3">
-                  {getChapterIcon(chap.id)}
-                  <span>{chap.name}</span>
+                <div className="flex items-center justify-between w-full text-xs">
+                  <div className="flex items-center gap-3">
+                    {getChapterIcon(chap.id)}
+                    <span>{chap.name}</span>
+                  </div>
+                  <span className={`text-[10px] px-2 py-0.5 rounded ${selectedChapter === chap.id ? "bg-white/20 text-white" : "bg-slate-700 text-slate-300"}`}>
+                    {chapterProgress[chap.id]}%
+                  </span>
                 </div>
-                <span className={`text-[10px] px-2 py-0.5 rounded ${selectedChapter === chap.id ? "bg-white/20 text-white" : "bg-slate-700 text-slate-300"}`}>
-                  {chap.questions.length}
-                </span>
+                <div className="h-1 w-full bg-black/20 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${chapterProgress[chap.id]}%` }}
+                    className={`h-full ${selectedChapter === chap.id ? "bg-white" : "bg-indigo-500"}`}
+                  />
+                </div>
               </li>
             ))}
           </ul>
@@ -441,6 +583,19 @@ export default function App() {
             </div>
             
             <div className="flex items-center gap-1.5 sm:gap-2">
+              <button 
+                onClick={() => setIsFlashcardMode(!isFlashcardMode)}
+                className={`flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all shadow-sm border ${
+                  isFlashcardMode 
+                    ? "bg-amber-600 text-white border-amber-500" 
+                    : "bg-white text-slate-700 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                <RefreshCcw size={14} className={isFlashcardMode ? "animate-spin-slow" : ""} />
+                <span className="hidden sm:inline">{isFlashcardMode ? "Revision Mode" : "Flashcard Mode"}</span>
+                <span className="sm:hidden">Study</span>
+              </button>
+
               <button 
                 onClick={() => setShowJumpMenu(true)}
                 className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-[10px] font-black uppercase tracking-wider transition-all shadow-sm"
@@ -524,20 +679,50 @@ export default function App() {
                     <div className="bg-white rounded-2xl shadow-xl shadow-slate-200/50 border border-slate-200/60 overflow-hidden">
                       <div className="p-6 lg:p-10 border-b border-slate-100 bg-gradient-to-br from-white to-slate-50/30">
                         <div className="flex flex-col mb-6">
-                          <div className="flex flex-wrap items-center gap-3 mb-4">
-                            <span className="text-[9px] font-black bg-indigo-600 text-white px-2 py-1 rounded shadow-sm tracking-widest uppercase">{currentQuestion.chapterName}</span>
-                            <span className="text-[9px] font-black bg-slate-900 text-white px-2 py-1 rounded shadow-sm tracking-widest uppercase">Term: {currentQuestion.examTerm}</span>
-                            {currentQuestion.originalQ && (
-                              <span className="text-[9px] font-black bg-slate-500 text-white px-2 py-1 rounded shadow-sm tracking-widest uppercase">Original Q.{currentQuestion.originalQ}</span>
-                            )}
+                          <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+                            <div className="flex flex-wrap items-center gap-3">
+                              <span className="text-[9px] font-black bg-indigo-600 text-white px-2 py-1 rounded shadow-sm tracking-widest uppercase">{currentQuestion.chapterName}</span>
+                              <span className="text-[9px] font-black bg-slate-900 text-white px-2 py-1 rounded shadow-sm tracking-widest uppercase">Term: {currentQuestion.examTerm}</span>
+                              {currentQuestion.originalQ && (
+                                <span className="text-[9px] font-black bg-slate-500 text-white px-2 py-1 rounded shadow-sm tracking-widest uppercase">Original Q.{currentQuestion.originalQ}</span>
+                              )}
+                            </div>
+                            
+                            <div className="flex items-center gap-2">
+                              <button 
+                                onClick={() => toggleBookmark(currentQuestion.id)}
+                                className={`p-2 rounded-lg border transition-all ${bookmarkedIds.includes(currentQuestion.id) ? "bg-amber-50 border-amber-200 text-amber-500 shadow-sm" : "bg-white border-slate-200 text-slate-400 hover:bg-slate-50"}`}
+                                title={bookmarkedIds.includes(currentQuestion.id) ? "Remove Bookmark" : "Bookmark Question"}
+                              >
+                                <Star size={18} className={bookmarkedIds.includes(currentQuestion.id) ? "fill-current" : ""} />
+                              </button>
+                              <button 
+                                onClick={() => toggleMastered(currentQuestion.id)}
+                                className={`p-2 rounded-lg border transition-all ${masteredIds.includes(currentQuestion.id) ? "bg-emerald-50 border-emerald-200 text-emerald-600 shadow-sm" : "bg-white border-slate-200 text-slate-400 hover:bg-slate-50"}`}
+                                title={masteredIds.includes(currentQuestion.id) ? "Mark as Not Mastered" : "Mark as Mastered"}
+                              >
+                                <CheckCircle2 size={18} />
+                              </button>
+                            </div>
                           </div>
                           
                           {currentQuestion.marks && (
-                            <div className="flex items-center gap-2 mb-2">
+                            <div className="flex items-center gap-4 mb-2">
                               <span className="h-px flex-1 bg-orange-100"></span>
-                              <span className="text-[10px] font-black text-orange-600 bg-orange-50 px-4 py-1.5 rounded-full border-2 border-orange-200 uppercase tracking-[0.15em] shadow-sm">
-                                {currentQuestion.marks}
-                              </span>
+                              <div className="flex items-center gap-3">
+                                <span className="text-[10px] font-black text-orange-600 bg-orange-50 px-4 py-1.5 rounded-full border-2 border-orange-200 uppercase tracking-[0.15em] shadow-sm">
+                                  {currentQuestion.marks}
+                                </span>
+                                {currentQuestion.totalMarks && (
+                                  <button 
+                                    onClick={() => startTimer(currentQuestion.totalMarks!)}
+                                    className="flex items-center gap-2 px-3 py-1.5 bg-slate-900 text-white rounded-full text-[9px] font-bold uppercase tracking-tight hover:bg-indigo-600 transition-all shadow-md group"
+                                  >
+                                    <Calculator size={12} className="group-hover:animate-pulse" />
+                                    Exam Timer Mode
+                                  </button>
+                                )}
+                              </div>
                               <span className="h-px flex-1 bg-orange-100"></span>
                             </div>
                           )}
@@ -545,11 +730,26 @@ export default function App() {
                         <h2 className="text-xl lg:text-3xl font-black text-slate-900 tracking-tight leading-snug mb-6">
                           {currentQuestion.title}
                         </h2>
-                        <div className="prose prose-slate prose-lg max-w-none prose-p:text-slate-700 prose-p:font-medium prose-p:leading-relaxed">
-                          <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
-                            {currentQuestion.text}
-                          </ReactMarkdown>
-                        </div>
+                        
+                        {isFlashcardMode && !showAnswer ? (
+                          <div className="p-12 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center text-center bg-slate-50/50">
+                            <BrainCircuit size={48} className="text-slate-300 mb-4" />
+                            <h3 className="text-lg font-bold text-slate-500 mb-2">Question Hidden (Flashcard Mode)</h3>
+                            <p className="text-sm text-slate-400 max-w-xs mb-6">Recall the context of {currentQuestion.title} before revealing.</p>
+                            <button 
+                              onClick={() => setShowAnswer(true)}
+                              className="px-6 py-2 bg-slate-900 text-white rounded-full text-[10px] font-black uppercase tracking-widest hover:bg-indigo-600 transition-all"
+                            >
+                              Show Question & Answer
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="prose prose-slate prose-lg max-w-none prose-p:text-slate-700 prose-p:font-medium prose-p:leading-relaxed">
+                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                              {currentQuestion.text}
+                            </ReactMarkdown>
+                          </div>
+                        )}
                       </div>
 
                       <div className="flex flex-col lg:flex-row">
@@ -730,6 +930,41 @@ export default function App() {
             )}
           </AnimatePresence>
         </div>
+        
+        {/* Exam Timer Overlay */}
+        <AnimatePresence>
+          {isTimerActive && (
+            <motion.div 
+              initial={{ y: 50, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 50, opacity: 0 }}
+              className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[100]"
+            >
+              <div className="bg-slate-900 text-white px-8 py-4 rounded-2xl shadow-2xl border border-slate-700 flex items-center gap-8 min-w-[300px]">
+                <div className="flex flex-col">
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-[0.2em]">Exam Simulation</span>
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-3xl font-black tabular-nums">{formatTime(timerRemaining)}</span>
+                    <span className="text-[10px] font-bold text-slate-500 uppercase">Left</span>
+                  </div>
+                </div>
+                <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
+                  <motion.div 
+                    initial={{ width: "100%" }}
+                    animate={{ width: `${(timerRemaining / timerFullSeconds) * 100}%` }}
+                    className={`h-full ${timerRemaining < 60 ? "bg-red-500 animate-pulse" : "bg-indigo-500"}`}
+                  />
+                </div>
+                <button 
+                  onClick={() => setIsTimerActive(false)}
+                  className="p-3 bg-red-600/20 text-red-500 rounded-xl hover:bg-red-600 hover:text-white transition-all shadow-lg"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* All Questions Jump Menu Modal */}
         <AnimatePresence>

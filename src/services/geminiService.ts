@@ -1,7 +1,13 @@
 import { GoogleGenAI } from "@google/genai";
 
 const getGeminiKey = () => {
-  return "AIzaSyCP8arGqyhSTi8I-JmR_btkQR4upx6cfnU";
+  // Try to get from environment first (AI Studio or Vercel)
+  const envKey = process.env.GEMINI_API_KEY || import.meta.env?.VITE_GEMINI_API_KEY;
+  if (envKey && envKey !== "undefined") {
+    return envKey;
+  }
+  // Fallback to the user provided key
+  return "AIzaSyC_InTe3b81pVagsL7qEeKRrVzwXvWER90";
 };
 
 export const getAiClient = () => {
